@@ -4,7 +4,6 @@ import time
 import numpy as np
 import cv2
 from PIL import Image
-import base64
 import torch
 from torch import nn
 from torchvision import transforms, models
@@ -248,14 +247,9 @@ if __name__ == "__main__":
         if file.endswith((".jpg", ".png")):
             print("\n//////////////////////////////////////////////")
             print("File:", file)
-            # image = cv2.imread(os.path.join(image_dir, file))
 
             # Read Image
-            with open(os.path.join(image_dir, file), "rb") as f:
-                file_base64 = base64.b64encode(f.read())
-            img_base64 = base64.b64decode(file_base64)  # img_base64 now is image to inference
-            print("Consumed base64 image!")
-            image_converted = Image.open(io.BytesIO(img_base64))
+            image_converted = Image.open(os.path.join(image_dir, file))
             count_file += 1
 
             # Resize Image if needed
@@ -288,13 +282,11 @@ if __name__ == "__main__":
                         height = y_max - y_min
 
                         crop_card = np.array(image_converted)[y_min:y_max, x_min:x_max]
-                        _, buffer = cv2.imencode('.jpg', cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
-                        crop_card_base64 = base64.b64encode(buffer).decode('utf-8')
-                        print("crop base64:", type(crop_card_base64))
-                        # imgdata = base64.b64decode(str(crop_card_base64))
-                        # img = Image.open(io.BytesIO(imgdata))
-                        # img.show()
+                        # cv2.imshow("Cropped card", cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
+                        # cv2.waitKey(0)
+                        # cv2.destroyAllWindows()
 
+                        # Crop card if needed
                         crop_card = rotate(crop_card)
                         # cv2.imshow("Rotated card", cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
                         # cv2.waitKey(0)
