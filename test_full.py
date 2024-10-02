@@ -233,11 +233,11 @@ if __name__ == "__main__":
     results_false = "./results/results_False/"
     results_crop_dir = "./results/results_crop/"
 
-    model_cls1 = load_model_v3("D:\Project\Computer_Vision\IQA\Xu_ly_chung_tu\mobilenetv3_Large_add_Grayscale.pth", num_classes=len(class_names))
-    model_cls2 = load_model_v3("D:\Project\Computer_Vision\IQA\Xu_ly_chung_tu\mobilenetv3_Large.pth", num_classes=len(class_names))
+    model_cls1 = load_model_v3("mobilenetv3_Large_add_Grayscale.pth", num_classes=len(class_names))
+    model_cls2 = load_model_v3("mobilenetv3_Large.pth", num_classes=len(class_names))
 
     print("Loading Faster RCNN...")
-    model_det = torch.load("D:\Project\Computer_Vision\IQA\Xu_ly_chung_tu\CCCD_model_Clean_Data_80e.pth")
+    model_det = torch.load("CCCD_model_Clean_Data_80e.pth")
     model_det.eval()
     model_det.to(device)
 
