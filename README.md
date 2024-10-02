@@ -17,3 +17,9 @@ File test_full.py thực hiện đầy  luồng Preprocessing, bao gồm:
 * results\results_False: Lưu các thẻ (card) được phát hiện và crop nhưng được phân loại sai (không phải card)
 * results\administrative_document: Lưu ảnh tài liệu
 * results\face: Lưu ảnh face
+
+## link models: 
+
+* https://drive.google.com/file/d/18hJnmtMUhnCm8mwAGhxSUrxJLmfpl_Ho/view?usp=sharing
+* https://drive.google.com/file/d/1HvqeA_qZQZQjtj1cVx_tPo1yhY-0S45y/view?usp=sharing
+* https://drive.google.com/file/d/1vURfqstglaQwilebJ94D6J-JvQLW6rK0/view?usp=sharing
