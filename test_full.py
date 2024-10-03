@@ -1,13 +1,20 @@
 import os
 import io
+from pathlib import Path
 import time
 import numpy as np
 import cv2
 from PIL import Image
+import base64
 import torch
 from torch import nn
 from torchvision import transforms, models
+import pdf2image
 import matplotlib.pyplot as plt
+import uuid
+from pyiqa.api_helpers import create_metric
+
+FILEPATH = "./file_storage"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class_names = ['card', 'administrative_document', 'face']
@@ -25,27 +32,21 @@ color_threshold = 15  # threshold of coloured-gray
 pixel_ratio_threshold = 0.35  # threshold of ratio of coloured (e.g. 40%)
 
 
-def resize_image(image, max_resize=1500, min_size=500):
-    # Lấy kích thước ban đầu của ảnh
+def is_resize(image, max_resize=1500, min_size=500):
     width, height = image.size
 
-    # Kiểm tra nếu chiều nhỏ nhất < 700 thì báo lỗi và bỏ qua ảnh
     if min(width, height) < min_size:
-        # image_converted.save("./results_False/small_image_" + os.path.basename(file))
-        return None  # Bỏ qua ảnh quá nhỏ
-
-    # Nếu chiều lớn nhất >= 2500 thì resize ảnh, giữ nguyên tỷ lệ
+        return False, image
     if max(width, height) >= max_resize:
-        # Tính tỷ lệ resize dựa trên chiều lớn nhất
+        # compute resize ratio
         ratio = max_resize / max(width, height)
         new_width = int(width * ratio)
         new_height = int(height * ratio)
         print(f"Resizing image to: {new_width}x{new_height}")
-        # Resize ảnh với kích thước mới
+
         image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
-    return image
-
+    return True, image
 
 def rotate(image):
     image_to_show = np.copy(image)
@@ -134,7 +135,7 @@ def rotate(image):
             # Áp dụng xoay và mở rộng khung chứa ảnh
             rotated_image = cv2.warpAffine(image, rotation_matrix, (bound_w, bound_h))
 
-            print("FOUND LINES.")
+            # print("FOUND LINES.")
             print("rotate angle:", rotation_angle)
         else:
             plt.figure(figsize=(12, 8))
@@ -148,7 +149,6 @@ def rotate(image):
     else:
         print("NO LINES!")
         return image
-
 
 def is_grayscale_02(img_PIL):
     state = "Gray Image"  # initial state is gray
@@ -190,7 +190,6 @@ def is_grayscale_02(img_PIL):
                 return state
     return state
 
-
 def load_model_v3(model_path, num_classes):
     print("Loading MobileNetV3...")
     # Khởi tạo mô hình MobileNetV3 với số lượng class cụ thể
@@ -203,6 +202,11 @@ def load_model_v3(model_path, num_classes):
 
     return model
 
+def load_model_iqa():
+    # set up IQA model
+    print("Loading IQA model...")
+    iqa_model = create_metric("brisque", metric_mode="NR")
+    return iqa_model
 
 def predict_with_threshold(model, image_converted):
     # Chuyển từ cv2 sang PIL
@@ -226,98 +230,166 @@ def predict_with_threshold(model, image_converted):
 
     return predicted_class
 
+def inference(page_num, image, model_cls_1, model_cls_2, model_det, model_iqa, path_page):
+    # Resize image if needed
+    flag, image = is_resize(image)  # image to inference
+
+    if not flag:
+        print("Image size is too small. Ignore image...!!")
+        return
+
+    # Start Inference
+    # Classify 3 types of document
+    predicted_class = predict_with_threshold(model_cls_1, image)
+    color_state = is_grayscale_02(img_PIL=image)
+    print("Predicted Class Done!")
+
+    if predicted_class == "card":
+        print("Predicted class:", predicted_class)
+
+        image_tensor = transform(image).unsqueeze(0).to(device)
+        print("Starting Detect Card!")
+        with torch.no_grad():
+            prediction = model_det(image_tensor)
+            # print(prediction[0])
+        boxes = prediction[0]['boxes'].cpu().numpy()
+        scores = prediction[0]['scores'].cpu().numpy()
+
+        # # Reject if more than 1 card in image
+        # if len(boxes) >= 2:
+        #     print("More than 1 card in image!")
+        #     return page_payload
+
+        for i, (box, score) in enumerate(zip(boxes, scores)):
+            if score > threshold_det:
+                card_data = dict()
+
+                print("__det_score__:", score, end="  |  ")
+                x_min, y_min, x_max, y_max = map(int, box)
+                # width = x_max - x_min
+                # height = y_max - y_min
+
+                crop_card = np.array(image)[y_min:y_max, x_min:x_max]
+
+                # Rotate if needed
+                crop_card = rotate(crop_card)
+
+                # Image quality assessment
+                iqa_score = model_iqa(Image.fromarray(crop_card), None).cpu().item()
+                print("quality_score:", round(iqa_score, 2), end="  |  ")
+
+                card_path = path_page + f"/card_{i+1}.jpg"
+
+                if iqa_score > 40:
+                    print("bad image")
+                    print("IQA Done!")
+                    Image.fromarray(crop_card).save(card_path)
+                    print(f"Saved crop card to {card_path}\n")
+                    continue
+                print("good image")
+                print("IQA Done!")
+
+                if color_state == "gray image":
+                    print("Type card and Gray image --> Pass!")
+                else:
+                    predict_class_v2 = predict_with_threshold(model_cls_2, Image.fromarray(crop_card))
+                    print("Predicted Crop Image Done!")
+                    if predict_class_v2 != "card":
+                        print("Type of Detected area != Type of Image")
+                        continue
+
+                Image.fromarray(crop_card).save(card_path)
+                print(f"Saved crop card to {card_path}\n")
+            else:
+                # page_payload["comment"] = "not found card!"
+                print("Classify to card but not found card!")
+        print("Detect Done!")
+
+        print("Finish Process !!!")
+        return
+
+    elif predicted_class == "administrative_document":
+        print("Predicted class:", predicted_class)
+
+        # Image quality assessment
+        iqa_score = model_iqa(image, None).cpu().item()
+        print("quality_score:", round(iqa_score, 2), end="  |  ")
+        if iqa_score > 85:
+            print("bad image")
+        else:
+            print("good image")
+        print("IQA Done!")
+
+        page_path = path_page + f"/administrative_document_page_{page_num+1}.jpg"
+        image.save(page_path)
+        print(f"Saved image to {page_path}\n")
+    elif predicted_class == "face":
+        print("Predicted class:", predicted_class)
+
+        # Image quality assessment
+        iqa_score = model_iqa(image, None).cpu().item()
+        print("quality_score:", round(iqa_score, 2), end="  |  ")
+        if iqa_score > 50:
+            print("bad image")
+        else:
+            print("good image")
+        print("IQA Done!")
+
+        page_path = path_page + f"/face_page_{page_num + 1}.jpg"
+        image.save(page_path)
+        print(f"Saved image to {page_path}\n")
+    else:
+        print("Predicted class:", predicted_class)
+    return
+
 
 if __name__ == "__main__":
     image_dir = "./image_test"
-    # image_dir = "./CCCD_Grayscale"
-    results_false = "./results/results_False/"
-    results_crop_dir = "./results/results_crop/"
 
     model_cls1 = load_model_v3("mobilenetv3_Large_add_Grayscale.pth", num_classes=len(class_names))
     model_cls2 = load_model_v3("mobilenetv3_Large.pth", num_classes=len(class_names))
 
     print("Loading Faster RCNN...")
-    model_det = torch.load("CCCD_model_Clean_Data_80e.pth")
+    model_det = torch.load("./CCCD_model_Clean_Data_80e.pth")
     model_det.eval()
     model_det.to(device)
 
+    model_iqa = load_model_iqa()
+
     count_file = 0
+    request_code = "AI-000"
+
     start_time = time.time()
     for file in os.listdir(image_dir):
-        if file.endswith((".jpg", ".png")):
-            print("\n//////////////////////////////////////////////")
-            print("File:", file)
+        count_file += 1
+        request_code = request_code + str(count_file)
+        file_extension = file.split('.')[-1].lower()
+        # Tạo file_id duy nhất
+        file_id = str(uuid.uuid4())
+        # Tạo thư mục lưu trữ nếu nó chưa tồn tại
+        path_by_request_code = f"{FILEPATH}/{request_code}"
+        Path(path_by_request_code).mkdir(parents=True, exist_ok=True)
+        file_path = os.path.join(path_by_request_code, f"{file_id}.{file_extension}")
+        # Lưu file với tên là file_id
+        with open(os.path.join(image_dir, file), "rb") as fh:
+            file_content = fh.read()
+        with open(file_path, "wb") as f:
+            f.write(file_content)
 
-            # Read Image
-            image_converted = Image.open(os.path.join(image_dir, file))
-            count_file += 1
+        print("\n//////////////////////////////")
+        if file.endswith(".pdf"):
+            pages = pdf2image.convert_from_path(os.path.join(image_dir, file))
+            # Loop for pages
+            for i, page in enumerate(pages):
+                path_page = f"{FILEPATH}/{request_code}/page_{str(i + 1)}"
+                Path(path_page).mkdir(parents=True, exist_ok=True)
+                inference(i, page, model_cls1, model_cls2, model_det, model_iqa, path_page)
 
-            # Resize Image if needed
-            image_converted = resize_image(image_converted)
-            if image_converted is None:
-                print("Image size is too small. Ignore image...!!")
-                continue
+        elif file.endswith((".jpg", ".png")):
+            page_num = 0
+            path_page = f"{FILEPATH}/{request_code}/page_{str(page_num + 1)}"
+            Path(path_page).mkdir(parents=True, exist_ok=True)
+            image = Image.open(os.path.join(image_dir, file))
+            inference(page_num, image, model_cls1, model_cls2, model_det, model_iqa, path_page)
 
-            # Start Inference
-            predict_class_v1 = predict_with_threshold(model_cls1, image_converted)
-            state_color = is_grayscale_02(image_converted)
-            print(f"Predicted File: {predict_class_v1}  |  Color state: {state_color}")
-
-            if predict_class_v1 == "card":
-                image_tensor = transform(image_converted).unsqueeze(0).to(device)
-                with torch.no_grad():
-                    prediction = model_det(image_tensor)
-                    # print(prediction[0])
-                boxes = prediction[0]['boxes'].cpu().numpy()
-                scores = prediction[0]['scores'].cpu().numpy()
-
-                valid_scores = [score for score in scores if score > threshold_det]
-                print("Number of bbox:", len(valid_scores))
-
-                for i, (box, score) in enumerate(zip(boxes, scores)):
-                    if score > threshold_det:
-                        print("__det_score__:", score, end="  |  ")
-                        x_min, y_min, x_max, y_max = map(int, box)
-                        width = x_max - x_min
-                        height = y_max - y_min
-
-                        crop_card = np.array(image_converted)[y_min:y_max, x_min:x_max]
-                        # cv2.imshow("Cropped card", cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
-                        # cv2.waitKey(0)
-                        # cv2.destroyAllWindows()
-
-                        # Crop card if needed
-                        crop_card = rotate(crop_card)
-                        # cv2.imshow("Rotated card", cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
-                        # cv2.waitKey(0)
-                        # cv2.destroyAllWindows()
-
-                        crop_path = os.path.join(results_crop_dir,
-                                                 os.path.basename(file).split('.')[0] + "_crop_" + str(
-                                                     i+1) + ".jpg")
-                        if state_color == "Gray Image":
-                            cv2.imwrite("./results/gray_image/" + os.path.basename(file), cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
-                            print(f"Saved output image with bounding box to {crop_path}")
-                        else:
-                            predict_class_v2 = predict_with_threshold(model_cls2, Image.fromarray(crop_card))
-                            print("Predicted crop image:", predict_class_v2)
-
-                            if predict_class_v2 == "card":
-                                cv2.imwrite(crop_path, cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
-                                print(f"Saved output image with bounding box to {crop_path}")
-                                continue
-                            else:
-                                print("Type of Detected area != type of image")
-                                cv2.imwrite(results_false + "detect_false_" + os.path.basename(file).split('.')[
-                                    0] + "_crop_" + str(i+1) + ".jpg",
-                                            cv2.cvtColor(crop_card, cv2.COLOR_RGB2BGR))
-                    else:
-                        print("Classification and Detection are not alike")
-            elif predict_class_v1 == "administrative_document":
-                image_converted.save("./results/administrative_document/" + os.path.basename(file))
-            elif predict_class_v1 == "face":
-                image_converted.save("./results/face/" + os.path.basename(file))
-            else:
-                print("Unable to classify image type. Ignore image...!!")
-                image_converted.save("./results_False/unknown_class_" + os.path.basename(file))
-    print("Avg time:", (time.time() - start_time) / count_file)
+    print("Avg time:", (time.time() - start_time)/count_file)
