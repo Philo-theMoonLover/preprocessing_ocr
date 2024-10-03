@@ -12,11 +12,9 @@ File test_full.py thực hiện đầy  luồng Preprocessing, bao gồm:
 
 ## Folders
 
-* results\results_crop: Lưu các thẻ (card) được phát hiện và crop
-* results\gray_image: Lưu các thẻ (card) có dạng grayscale được phát hiện và crop
-* results\results_False: Lưu các thẻ (card) được phát hiện và crop nhưng được phân loại sai (không phải card)
-* results\administrative_document: Lưu ảnh tài liệu
-* results\face: Lưu ảnh face
+* image_test: ảnh test
+* pyiqa: source code đánh giá ảnh
+* Đoạn code sẽ tự tạo folder _file_storage_ nếu chưa có
 
 ## link models: 
 
